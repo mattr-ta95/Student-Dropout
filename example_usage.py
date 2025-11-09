@@ -73,7 +73,12 @@ def main():
         # Plot results
         print("Generating visualizations...")
         predictor.plot_results(stage, 'xgboost')
-        predictor.plot_results(stage, 'neural_network')
+
+        # Only plot neural network results if the model was trained
+        if f'neural_network_{stage}' in predictor.results:
+            predictor.plot_results(stage, 'neural_network')
+        else:
+            print(f"Skipping neural network visualization for {stage} (model not trained)")
     
     # Generate comprehensive report
     print("\n" + "="*30)
@@ -94,15 +99,19 @@ def main():
     for stage in stages:
         xgb_key = f'xgboost_{stage}'
         nn_key = f'neural_network_{stage}'
-        
-        if xgb_key in predictor.results and nn_key in predictor.results:
+
+        if xgb_key in predictor.results:
             xgb_auc = predictor.results[xgb_key]['auc']
-            nn_auc = predictor.results[nn_key]['auc']
-            
             print(f"Stage {stage.upper()}:")
             print(f"  XGBoost AUC: {xgb_auc:.4f}")
-            print(f"  Neural Network AUC: {nn_auc:.4f}")
-            print(f"  Best Model: {'XGBoost' if xgb_auc > nn_auc else 'Neural Network'}")
+
+            if nn_key in predictor.results:
+                nn_auc = predictor.results[nn_key]['auc']
+                print(f"  Neural Network AUC: {nn_auc:.4f}")
+                print(f"  Best Model: {'XGBoost' if xgb_auc > nn_auc else 'Neural Network'}")
+            else:
+                print(f"  Neural Network: Not trained")
+                print(f"  Best Model: XGBoost (only model)")
             print()
     
     # Feature importance analysis (if available)

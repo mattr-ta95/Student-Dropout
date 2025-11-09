@@ -14,26 +14,39 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import warnings
+import logging
+import joblib
+import json
+from typing import Optional, Dict, Tuple, Any
+from pathlib import Path
+
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier, BaggingClassifier
 from xgboost import XGBClassifier
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
 from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, recall_score, f1_score, precision_score, confusion_matrix, ConfusionMatrixDisplay
-from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder
-from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder, OrdinalEncoder, FunctionTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.dummy import DummyClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.base import BaseEstimator, TransformerMixin
 from dateutil.relativedelta import relativedelta
 from datetime import datetime
 import xgboost as xgb
-from sklearn.preprocessing import FunctionTransformer
-import warnings
-warnings.filterwarnings('ignore')
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Suppress specific warnings only
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn')
 
 # Optional imports for neural networks
 try:
@@ -42,7 +55,7 @@ try:
     NEURAL_NETWORK_AVAILABLE = True
 except ImportError:
     NEURAL_NETWORK_AVAILABLE = False
-    print("⚠️  TensorFlow/Keras not available. Neural network models will be skipped.")
+    logger.warning("TensorFlow/Keras not available. Neural network models will be skipped.")
 
 class StudentDropoutPredictor:
     """
@@ -52,22 +65,54 @@ class StudentDropoutPredictor:
     and evaluation across three stages of student data.
     """
     
-    def __init__(self):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """
+        Initialize the StudentDropoutPredictor.
+
+        Args:
+            config (dict, optional): Configuration dictionary with model parameters
+        """
         self.models = {}
         self.preprocessors = {}
         self.results = {}
+        self.config = config or self._default_config()
+
+    def _default_config(self) -> Dict[str, Any]:
+        """Return default configuration."""
+        return {
+            'random_state': 42,
+            'test_size': 0.2,
+            'target_column': 'CompletedCourse',
+            'target_mapping': {'No': 0, 'Yes': 1},
+            'xgboost_params': {
+                'learning_rate': [0.1, 0.2, 0.3],
+                'max_depth': [3, 4, 5],
+                'n_estimators': [100, 200, 300]
+            },
+            'neural_network_params': {
+                'learning_rates': [0.01, 0.1],
+                'neurons': [8, 12],
+                'activations': ['relu', 'tanh'],
+                'optimizers': ['adam']
+            }
+        }
         
-    def load_data(self, stage1_path=None, stage2_path=None, stage3_path=None):
+    def load_data(self, stage1_path: Optional[str] = None, stage2_path: Optional[str] = None,
+                  stage3_path: Optional[str] = None) -> None:
         """
         Load student data from CSV files or use default Google Drive URLs.
-        
+
         Args:
-            stage1_path (str): Path to Stage 1 data CSV file
-            stage2_path (str): Path to Stage 2 data CSV file  
-            stage3_path (str): Path to Stage 3 data CSV file
+            stage1_path (str, optional): Path to Stage 1 data CSV file
+            stage2_path (str, optional): Path to Stage 2 data CSV file
+            stage3_path (str, optional): Path to Stage 3 data CSV file
+
+        Raises:
+            FileNotFoundError: If data files cannot be loaded
+            ValueError: If data is invalid or missing required columns
         """
-        print("Loading student data...")
-        
+        logger.info("Loading student data...")
+
         # Default URLs if local files not provided
         if stage1_path is None:
             stage1_path = "https://drive.google.com/uc?id=1pA8DDYmQuaLyxADCOZe1QaSQwF16q1J6"
@@ -75,31 +120,42 @@ class StudentDropoutPredictor:
             stage2_path = "https://drive.google.com/uc?id=1vy1JFQZva3lhMJQV69C43AB1NTM4W-DZ"
         if stage3_path is None:
             stage3_path = "https://drive.google.com/uc?id=18oyu-RQotQN6jaibsLBoPdqQJbj_cV2-"
-        
+
         try:
-            # Try to load local files first
-            if stage1_path.endswith('.csv') and not stage1_path.startswith('http'):
-                self.s1_data = pd.read_csv(stage1_path)
-            else:
-                self.s1_data = pd.read_csv(stage1_path)
-                
-            if stage2_path.endswith('.csv') and not stage2_path.startswith('http'):
-                self.s2_data = pd.read_csv(stage2_path)
-            else:
-                self.s2_data = pd.read_csv(stage2_path)
-                
-            if stage3_path.endswith('.csv') and not stage3_path.startswith('http'):
-                self.s3_data = pd.read_csv(stage3_path)
-            else:
-                self.s3_data = pd.read_csv(stage3_path)
-                
-            print(f"Stage 1 data shape: {self.s1_data.shape}")
-            print(f"Stage 2 data shape: {self.s2_data.shape}")
-            print(f"Stage 3 data shape: {self.s3_data.shape}")
-            
+            # Load data files
+            self.s1_data = pd.read_csv(stage1_path)
+            self.s2_data = pd.read_csv(stage2_path)
+            self.s3_data = pd.read_csv(stage3_path)
+
+            # Validate data
+            self._validate_data()
+
+            logger.info(f"Stage 1 data shape: {self.s1_data.shape}")
+            logger.info(f"Stage 2 data shape: {self.s2_data.shape}")
+            logger.info(f"Stage 3 data shape: {self.s3_data.shape}")
+
         except Exception as e:
-            print(f"Error loading data: {e}")
+            logger.error(f"Error loading data: {e}")
             raise
+
+    def _validate_data(self) -> None:
+        """Validate that loaded data has required columns and structure."""
+        target_col = self.config['target_column']
+
+        for stage_name, data in [('Stage 1', self.s1_data), ('Stage 2', self.s2_data), ('Stage 3', self.s3_data)]:
+            if data is None or data.empty:
+                raise ValueError(f"{stage_name} data is empty")
+
+            if target_col not in data.columns:
+                raise ValueError(f"{stage_name} data missing required column: {target_col}")
+
+            # Check target values
+            target_values = data[target_col].unique()
+            expected_values = set(self.config['target_mapping'].keys())
+            actual_values = set(target_values)
+
+            if not actual_values.issubset(expected_values):
+                logger.warning(f"{stage_name} has unexpected target values: {actual_values - expected_values}")
 
     def explore_data(self, stage='s1'):
         """
@@ -129,79 +185,94 @@ class StudentDropoutPredictor:
             
         return data
 
-    def preprocess_stage1(self):
+    def preprocess_stage1(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
         """Preprocess Stage 1 data (applicant and course information)."""
-        print("\n=== Preprocessing Stage 1 Data ===")
-        
+        logger.info("=== Preprocessing Stage 1 Data ===")
+
         # Create target variable
-        target = self.s1_data['CompletedCourse'].copy()
-        target = target.map({'No': 0, 'Yes': 1})
-        
+        target_col = self.config['target_column']
+        target = self.s1_data[target_col].copy()
+        target = target.map(self.config['target_mapping'])
+
         # Remove target from features
-        X = self.s1_data.drop(['CompletedCourse'], axis=1)
-        
+        X = self.s1_data.drop([target_col], axis=1)
+
         # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, target, test_size=0.2, random_state=42)
-        
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, target,
+            test_size=self.config['test_size'],
+            random_state=self.config['random_state']
+        )
+
         # Store processed data
         self.X_train_s1 = X_train
         self.X_test_s1 = X_test
         self.y_train_s1 = y_train
         self.y_test_s1 = y_test
-        
-        print(f"Training set shape: {X_train.shape}")
-        print(f"Test set shape: {X_test.shape}")
-        
+
+        logger.info(f"Training set shape: {X_train.shape}")
+        logger.info(f"Test set shape: {X_test.shape}")
+
         return X_train, X_test, y_train, y_test
 
-    def preprocess_stage2(self):
+    def preprocess_stage2(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
         """Preprocess Stage 2 data (student and engagement data)."""
-        print("\n=== Preprocessing Stage 2 Data ===")
-        
+        logger.info("=== Preprocessing Stage 2 Data ===")
+
         # Create target variable
-        target = self.s2_data['CompletedCourse'].copy()
-        target = target.map({'No': 0, 'Yes': 1})
-        
+        target_col = self.config['target_column']
+        target = self.s2_data[target_col].copy()
+        target = target.map(self.config['target_mapping'])
+
         # Remove target from features
-        X = self.s2_data.drop(['CompletedCourse'], axis=1)
-        
+        X = self.s2_data.drop([target_col], axis=1)
+
         # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, target, test_size=0.2, random_state=42)
-        
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, target,
+            test_size=self.config['test_size'],
+            random_state=self.config['random_state']
+        )
+
         # Store processed data
         self.X_train_s2 = X_train
         self.X_test_s2 = X_test
         self.y_train_s2 = y_train
         self.y_test_s2 = y_test
-        
-        print(f"Training set shape: {X_train.shape}")
-        print(f"Test set shape: {X_test.shape}")
-        
+
+        logger.info(f"Training set shape: {X_train.shape}")
+        logger.info(f"Test set shape: {X_test.shape}")
+
         return X_train, X_test, y_train, y_test
 
-    def preprocess_stage3(self):
+    def preprocess_stage3(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
         """Preprocess Stage 3 data (academic performance data)."""
-        print("\n=== Preprocessing Stage 3 Data ===")
-        
+        logger.info("=== Preprocessing Stage 3 Data ===")
+
         # Create target variable
-        target = self.s3_data['CompletedCourse'].copy()
-        target = target.map({'No': 0, 'Yes': 1})
-        
+        target_col = self.config['target_column']
+        target = self.s3_data[target_col].copy()
+        target = target.map(self.config['target_mapping'])
+
         # Remove target from features
-        X = self.s3_data.drop(['CompletedCourse'], axis=1)
-        
+        X = self.s3_data.drop([target_col], axis=1)
+
         # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, target, test_size=0.2, random_state=42)
-        
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, target,
+            test_size=self.config['test_size'],
+            random_state=self.config['random_state']
+        )
+
         # Store processed data
         self.X_train_s3 = X_train
         self.X_test_s3 = X_test
         self.y_train_s3 = y_train
         self.y_test_s3 = y_test
-        
-        print(f"Training set shape: {X_train.shape}")
-        print(f"Test set shape: {X_test.shape}")
-        
+
+        logger.info(f"Training set shape: {X_train.shape}")
+        logger.info(f"Test set shape: {X_test.shape}")
+
         return X_train, X_test, y_train, y_test
 
     def create_preprocessing_pipeline(self, stage):
@@ -395,10 +466,10 @@ class StudentDropoutPredictor:
             hyperparameter_tuning (bool): Whether to perform hyperparameter tuning
         """
         if not NEURAL_NETWORK_AVAILABLE:
-            print(f"⚠️  Skipping Neural Network training for Stage {stage.upper()} - TensorFlow/Keras not available")
+            logger.warning(f"Skipping Neural Network training for Stage {stage.upper()} - TensorFlow/Keras not available")
             return None, None, None
-        
-        print(f"\n=== Training Neural Network Model for Stage {stage.upper()} ===")
+
+        logger.info(f"=== Training Neural Network Model for Stage {stage.upper()} ===")
         
         # Get data
         if stage == 's1':
@@ -416,28 +487,38 @@ class StudentDropoutPredictor:
         input_shape = X_train_processed.shape[1]
         
         if hyperparameter_tuning:
-            # Hyperparameter tuning
-            learning_rates = [0.01, 0.1, 0.2]
-            neurons = [8, 12, 16]
-            activations = ['relu', 'tanh', 'sigmoid']
-            optimizers = ['adam', 'sgd']
-            
+            # Hyperparameter tuning (optimized with fewer combinations)
+            nn_params = self.config['neural_network_params']
+            learning_rates = nn_params['learning_rates']
+            neurons_list = nn_params['neurons']
+            activations = nn_params['activations']
+            optimizers = nn_params['optimizers']
+
             results = []
-            
+            total_combinations = len(learning_rates) * len(neurons_list) * len(activations) * len(optimizers)
+            logger.info(f"Testing {total_combinations} hyperparameter combinations...")
+
+            combination_num = 0
             for lr in learning_rates:
-                for neuron in neurons:
+                for neuron in neurons_list:
                     for opt in optimizers:
                         for activation in activations:
-                            model = self.create_neural_network(input_shape, learning_rate=lr, neurons=neuron, activation=activation, optimizer=opt)
-                            
+                            combination_num += 1
+                            logger.debug(f"Testing combination {combination_num}/{total_combinations}: "
+                                       f"LR={lr}, Neurons={neuron}, Activation={activation}, Optimizer={opt}")
+
+                            model = self.create_neural_network(input_shape, learning_rate=lr, neurons=neuron,
+                                                              activation=activation, optimizer=opt)
+
                             # Train with early stopping
-                            early_stopping = keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)
-                            history = model.fit(X_train_processed, y_train, epochs=10, validation_split=0.2, callbacks=[early_stopping], verbose=0)
-                            
+                            early_stopping = keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+                            history = model.fit(X_train_processed, y_train, epochs=10, validation_split=0.2,
+                                              callbacks=[early_stopping], verbose=0)
+
                             # Evaluate
-                            y_pred = (model.predict(X_test_processed) > 0.5).astype(int)
+                            y_pred = (model.predict(X_test_processed, verbose=0) > 0.5).astype(int)
                             accuracy = accuracy_score(y_test, y_pred)
-                            
+
                             results.append({
                                 'learning_rate': lr,
                                 'neurons': neuron,
@@ -447,14 +528,14 @@ class StudentDropoutPredictor:
                                 'model': model,
                                 'history': history
                             })
-            
+
             # Find best model
             best_result = max(results, key=lambda x: x['accuracy'])
             best_model = best_result['model']
             best_history = best_result['history']
-            
-            print(f"Best parameters: LR={best_result['learning_rate']}, Neurons={best_result['neurons']}, "
-                  f"Activation={best_result['activation']}, Optimizer={best_result['optimizer']}")
+
+            logger.info(f"Best parameters: LR={best_result['learning_rate']}, Neurons={best_result['neurons']}, "
+                       f"Activation={best_result['activation']}, Optimizer={best_result['optimizer']}")
         else:
             # Use default parameters
             best_model = self.create_neural_network(input_shape)
@@ -538,25 +619,109 @@ class StudentDropoutPredictor:
             plt.tight_layout()
             plt.show()
 
+    def save_model(self, model_key: str, output_dir: str = "models") -> None:
+        """
+        Save a trained model and its preprocessor to disk.
+
+        Args:
+            model_key (str): Key of the model to save (e.g., 'xgboost_s1')
+            output_dir (str): Directory to save the model files
+
+        Raises:
+            ValueError: If model_key not found
+        """
+        if model_key not in self.models:
+            raise ValueError(f"Model '{model_key}' not found. Available models: {list(self.models.keys())}")
+
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Save model
+        model_file = output_path / f"{model_key}_model.pkl"
+        joblib.dump(self.models[model_key], model_file)
+        logger.info(f"Model saved to {model_file}")
+
+        # Save preprocessor
+        if model_key in self.preprocessors:
+            preprocessor_file = output_path / f"{model_key}_preprocessor.pkl"
+            joblib.dump(self.preprocessors[model_key], preprocessor_file)
+            logger.info(f"Preprocessor saved to {preprocessor_file}")
+
+        # Save results
+        if model_key in self.results:
+            results_file = output_path / f"{model_key}_results.json"
+            # Convert numpy types to Python types for JSON serialization
+            results_to_save = {}
+            for key, value in self.results[model_key].items():
+                if key not in ['predictions', 'y_test', 'history']:  # Skip non-serializable items
+                    if isinstance(value, (np.integer, np.floating)):
+                        results_to_save[key] = float(value)
+                    else:
+                        results_to_save[key] = value
+
+            with open(results_file, 'w') as f:
+                json.dump(results_to_save, f, indent=2)
+            logger.info(f"Results saved to {results_file}")
+
+    def load_model(self, model_key: str, input_dir: str = "models") -> None:
+        """
+        Load a trained model and its preprocessor from disk.
+
+        Args:
+            model_key (str): Key of the model to load (e.g., 'xgboost_s1')
+            input_dir (str): Directory containing the model files
+
+        Raises:
+            FileNotFoundError: If model files not found
+        """
+        input_path = Path(input_dir)
+
+        # Load model
+        model_file = input_path / f"{model_key}_model.pkl"
+        if not model_file.exists():
+            raise FileNotFoundError(f"Model file not found: {model_file}")
+        self.models[model_key] = joblib.load(model_file)
+        logger.info(f"Model loaded from {model_file}")
+
+        # Load preprocessor
+        preprocessor_file = input_path / f"{model_key}_preprocessor.pkl"
+        if preprocessor_file.exists():
+            self.preprocessors[model_key] = joblib.load(preprocessor_file)
+            logger.info(f"Preprocessor loaded from {preprocessor_file}")
+
+        # Load results
+        results_file = input_path / f"{model_key}_results.json"
+        if results_file.exists():
+            with open(results_file, 'r') as f:
+                self.results[model_key] = json.load(f)
+            logger.info(f"Results loaded from {results_file}")
+
+    def save_all_models(self, output_dir: str = "models") -> None:
+        """Save all trained models to disk."""
+        for model_key in self.models.keys():
+            self.save_model(model_key, output_dir)
+        logger.info(f"All models saved to {output_dir}")
+
     def generate_report(self):
         """Generate a comprehensive report of all model results."""
-        print("\n" + "="*60)
-        print("STUDENT DROPOUT PREDICTION - MODEL PERFORMANCE REPORT")
-        print("="*60)
-        
+        logger.info("\n" + "="*60)
+        logger.info("STUDENT DROPOUT PREDICTION - MODEL PERFORMANCE REPORT")
+        logger.info("="*60)
+
         for model_key, results in self.results.items():
             stage = model_key.split('_')[-1]
             model_type = '_'.join(model_key.split('_')[:-1])
-            
-            print(f"\n{model_type.upper()} - Stage {stage.upper()}:")
-            print(f"  Accuracy:  {results['accuracy']:.4f}")
-            print(f"  Precision: {results['precision']:.4f}")
-            print(f"  Recall:    {results['recall']:.4f}")
-            print(f"  AUC:       {results['auc']:.4f}")
-        
+
+            logger.info(f"\n{model_type.upper()} - Stage {stage.upper()}:")
+            logger.info(f"  Accuracy:  {results['accuracy']:.4f}")
+            logger.info(f"  Precision: {results['precision']:.4f}")
+            logger.info(f"  Recall:    {results['recall']:.4f}")
+            logger.info(f"  AUC:       {results['auc']:.4f}")
+
         # Find best performing model
-        best_model = max(self.results.items(), key=lambda x: x[1]['auc'])
-        print(f"\nBest performing model: {best_model[0]} (AUC: {best_model[1]['auc']:.4f})")
+        if self.results:
+            best_model = max(self.results.items(), key=lambda x: x[1]['auc'])
+            logger.info(f"\nBest performing model: {best_model[0]} (AUC: {best_model[1]['auc']:.4f})")
 
     def run_full_pipeline(self, stage1_path=None, stage2_path=None, stage3_path=None):
         """
