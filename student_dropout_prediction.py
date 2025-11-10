@@ -58,6 +58,38 @@ except (ImportError, Exception) as e:
     # Use print here since logger might not be configured yet
     print(f"⚠️  TensorFlow/Keras not available: {type(e).__name__}. Neural network models will be skipped.")
 
+# Custom transformers for preprocessing pipeline (must be at module level for pickling)
+class AgeCalculator(BaseEstimator, TransformerMixin):
+    """Calculate age from date of birth."""
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = X.copy()
+        if 'DateofBirth' in X.columns:
+            X['DateofBirth'] = pd.to_datetime(X['DateofBirth'], format='%d/%m/%Y', errors='coerce')
+            today = datetime.now()
+            X['Age'] = X['DateofBirth'].apply(
+                lambda dob: relativedelta(today, dob).years if pd.notnull(dob) and isinstance(dob, datetime) else np.nan
+            )
+            X = X.drop(['DateofBirth'], axis=1, errors='ignore')
+        return X
+
+
+class ColumnDropper(BaseEstimator, TransformerMixin):
+    """Drop specified columns from dataframe."""
+
+    def __init__(self, columns_to_drop):
+        self.columns_to_drop = columns_to_drop
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return X.drop([col for col in self.columns_to_drop if col in X.columns], axis=1, errors='ignore')
+
+
 class StudentDropoutPredictor:
     """
     A comprehensive machine learning pipeline for predicting student dropout rates.
@@ -292,22 +324,6 @@ class StudentDropoutPredictor:
         else:
             raise ValueError("Stage must be 's1', 's2', or 's3'")
 
-        # Custom transformer for age calculation
-        class AgeCalculator(BaseEstimator, TransformerMixin):
-            def fit(self, X, y=None):
-                return self
-
-            def transform(self, X):
-                X = X.copy()
-                if 'DateofBirth' in X.columns:
-                    X['DateofBirth'] = pd.to_datetime(X['DateofBirth'], format='%d/%m/%Y', errors='coerce')
-                    today = datetime.now()
-                    X['Age'] = X['DateofBirth'].apply(
-                        lambda dob: relativedelta(today, dob).years if pd.notnull(dob) and isinstance(dob, datetime) else np.nan
-                    )
-                    X = X.drop(['DateofBirth'], axis=1, errors='ignore')
-                return X
-
         # Stage-specific columns to drop
         if stage == 's1':
             columns_to_drop = ['LearnerCode', 'DiscountType', 'HomeState', 'CentreName', 'ProgressionDegree', 'HomeCity']
@@ -352,17 +368,7 @@ class StudentDropoutPredictor:
             remainder='drop'
         )
 
-        # Create a custom transformer for dropping columns (picklable)
-        class ColumnDropper(BaseEstimator, TransformerMixin):
-            def __init__(self, columns_to_drop):
-                self.columns_to_drop = columns_to_drop
-
-            def fit(self, X, y=None):
-                return self
-
-            def transform(self, X):
-                return X.drop([col for col in self.columns_to_drop if col in X.columns], axis=1, errors='ignore')
-
+        # Use module-level classes for pickling compatibility
         drop_columns_transformer = ColumnDropper(columns_to_drop)
 
         pipeline = Pipeline([
