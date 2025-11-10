@@ -53,9 +53,10 @@ try:
     import tensorflow as tf
     import keras
     NEURAL_NETWORK_AVAILABLE = True
-except ImportError:
+except (ImportError, Exception) as e:
     NEURAL_NETWORK_AVAILABLE = False
-    logger.warning("TensorFlow/Keras not available. Neural network models will be skipped.")
+    # Use print here since logger might not be configured yet
+    print(f"⚠️  TensorFlow/Keras not available: {type(e).__name__}. Neural network models will be skipped.")
 
 class StudentDropoutPredictor:
     """
