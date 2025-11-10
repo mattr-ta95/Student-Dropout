@@ -7,44 +7,45 @@ This script tests that all dependencies are properly installed and the code can 
 
 import sys
 import os
+import importlib
 
 def test_imports():
     """Test that all required packages can be imported."""
     print("🧪 Testing package imports...")
-    
+
     required_packages = [
-        ('pandas', 'pd'),
-        ('numpy', 'np'),
-        ('matplotlib.pyplot', 'plt'),
-        ('seaborn', 'sns'),
-        ('sklearn', 'sklearn'),
-        ('xgboost', 'xgb'),
+        'pandas',
+        'numpy',
+        'matplotlib.pyplot',
+        'seaborn',
+        'sklearn',
+        'xgboost',
     ]
-    
+
     optional_packages = [
-        ('tensorflow', 'tf'),
-        ('keras', 'keras'),
+        'tensorflow',
+        'keras',
     ]
-    
+
     failed_imports = []
-    
+
     # Test required packages
-    for package, alias in required_packages:
+    for package in required_packages:
         try:
-            exec(f"import {package} as {alias}")
+            importlib.import_module(package)
             print(f"✅ {package}")
         except ImportError as e:
             print(f"❌ {package}: {e}")
             failed_imports.append(package)
-    
+
     # Test optional packages
-    for package, alias in optional_packages:
+    for package in optional_packages:
         try:
-            exec(f"import {package} as {alias}")
+            importlib.import_module(package)
             print(f"✅ {package} (optional)")
         except ImportError as e:
             print(f"⚠️  {package} (optional): {e}")
-    
+
     return failed_imports
 
 def test_data_files():

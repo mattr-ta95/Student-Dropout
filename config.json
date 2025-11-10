@@ -1,0 +1,29 @@
+{
+  "random_state": 42,
+  "test_size": 0.2,
+  "target_column": "CompletedCourse",
+  "target_mapping": {
+    "No": 0,
+    "Yes": 1
+  },
+  "xgboost_params": {
+    "learning_rate": [0.1, 0.2, 0.3],
+    "max_depth": [3, 4, 5],
+    "n_estimators": [100, 200, 300]
+  },
+  "neural_network_params": {
+    "learning_rates": [0.01, 0.1],
+    "neurons": [8, 12],
+    "activations": ["relu", "tanh"],
+    "optimizers": ["adam"]
+  },
+  "columns_to_drop": {
+    "s1": ["LearnerCode", "DiscountType", "HomeState", "CentreName", "ProgressionDegree", "HomeCity"],
+    "s2": ["LearnerCode", "DiscountType", "HomeState", "ProgressionDegree", "CentreName", "HomeCity", "UnauthorisedAbsenceCount"],
+    "s3": ["LearnerCode", "DiscountType", "HomeState", "ProgressionDegree", "CentreName", "HomeCity", "UnauthorisedAbsenceCount", "PassedModules", "AssessedModules"]
+  },
+  "cv_folds": 5,
+  "early_stopping_patience": 5,
+  "neural_network_epochs": 10,
+  "validation_split": 0.2
+}

@@ -10,10 +10,18 @@ import sys
 import os
 
 def run_command(command, description):
-    """Run a command and handle errors."""
+    """Run a command and handle errors.
+
+    Args:
+        command (list): Command to run as a list of strings
+        description (str): Description of the command
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
     print(f"🔄 {description}...")
     try:
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
         print(f"✅ {description} completed successfully!")
         return True
     except subprocess.CalledProcessError as e:
@@ -38,36 +46,51 @@ def create_virtual_environment():
     if os.path.exists("venv"):
         print("📁 Virtual environment already exists!")
         return True
-    
-    return run_command("python -m venv venv", "Creating virtual environment")
+
+    return run_command([sys.executable, "-m", "venv", "venv"], "Creating virtual environment")
 
 def activate_and_install():
     """Activate virtual environment and install dependencies."""
     if os.name == 'nt':  # Windows
-        activate_cmd = "venv\\Scripts\\activate"
-        pip_cmd = "venv\\Scripts\\pip"
+        pip_cmd = os.path.join("venv", "Scripts", "pip")
     else:  # Unix/Linux/macOS
-        activate_cmd = "source venv/bin/activate"
-        pip_cmd = "venv/bin/pip"
-    
+        pip_cmd = os.path.join("venv", "bin", "pip")
+
     # Install dependencies
-    install_cmd = f"{pip_cmd} install -r requirements.txt"
+    install_cmd = [pip_cmd, "install", "-r", "requirements.txt"]
     return run_command(install_cmd, "Installing dependencies")
 
 def verify_installation():
     """Verify that key packages are installed."""
     print("🔍 Verifying installation...")
-    
-    try:
-        import pandas
-        import numpy
-        import sklearn
-        import xgboost
-        import tensorflow
-        print("✅ All key packages imported successfully!")
+
+    required_packages = ['pandas', 'numpy', 'sklearn', 'xgboost']
+    optional_packages = ['tensorflow', 'keras']
+
+    all_required_ok = True
+
+    # Check required packages
+    for package in required_packages:
+        try:
+            __import__(package)
+            print(f"✅ {package}")
+        except ImportError as e:
+            print(f"❌ {package}: {e}")
+            all_required_ok = False
+
+    # Check optional packages
+    for package in optional_packages:
+        try:
+            __import__(package)
+            print(f"✅ {package} (optional)")
+        except ImportError:
+            print(f"⚠️  {package} (optional): Not installed")
+
+    if all_required_ok:
+        print("✅ All required packages imported successfully!")
         return True
-    except ImportError as e:
-        print(f"❌ Import error: {e}")
+    else:
+        print("❌ Some required packages failed to import")
         return False
 
 def main():
