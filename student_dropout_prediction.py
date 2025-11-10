@@ -352,7 +352,18 @@ class StudentDropoutPredictor:
             remainder='drop'
         )
 
-        drop_columns_transformer = FunctionTransformer(lambda X: X.drop([col for col in columns_to_drop if col in X.columns], axis=1, errors='ignore'))
+        # Create a custom transformer for dropping columns (picklable)
+        class ColumnDropper(BaseEstimator, TransformerMixin):
+            def __init__(self, columns_to_drop):
+                self.columns_to_drop = columns_to_drop
+
+            def fit(self, X, y=None):
+                return self
+
+            def transform(self, X):
+                return X.drop([col for col in self.columns_to_drop if col in X.columns], axis=1, errors='ignore')
+
+        drop_columns_transformer = ColumnDropper(columns_to_drop)
 
         pipeline = Pipeline([
             ('drop_columns', drop_columns_transformer),
