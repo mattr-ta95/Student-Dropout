@@ -279,7 +279,7 @@ class StudentDropoutPredictor:
     def create_preprocessing_pipeline(self, stage):
         """
         Create preprocessing pipeline for the specified stage.
-        
+
         Args:
             stage (str): Stage identifier ('s1', 's2', or 's3')
         """
@@ -291,7 +291,7 @@ class StudentDropoutPredictor:
             X_train = self.X_train_s3
         else:
             raise ValueError("Stage must be 's1', 's2', or 's3'")
-        
+
         # Custom transformer for age calculation
         class AgeCalculator(BaseEstimator, TransformerMixin):
             def fit(self, X, y=None):
@@ -300,7 +300,7 @@ class StudentDropoutPredictor:
             def transform(self, X):
                 X = X.copy()
                 if 'DateofBirth' in X.columns:
-                    X['DateofBirth'] = pd.to_datetime(X['DateofBirth'], format='%d/%m/%Y')
+                    X['DateofBirth'] = pd.to_datetime(X['DateofBirth'], format='%d/%m/%Y', errors='coerce')
                     today = datetime.now()
                     X['Age'] = X['DateofBirth'].apply(
                         lambda dob: relativedelta(today, dob).years if pd.notnull(dob) and isinstance(dob, datetime) else np.nan
@@ -308,13 +308,6 @@ class StudentDropoutPredictor:
                     X = X.drop(['DateofBirth'], axis=1, errors='ignore')
                 return X
 
-        # Identify features
-        numerical_features = X_train.select_dtypes(include=np.number).columns.tolist()
-        categorical_features = X_train.select_dtypes(exclude=np.number).columns.tolist()
-        
-        # Add Age to numerical features
-        numerical_features.append('Age')
-        
         # Stage-specific columns to drop
         if stage == 's1':
             columns_to_drop = ['LearnerCode', 'DiscountType', 'HomeState', 'CentreName', 'ProgressionDegree', 'HomeCity']
@@ -322,20 +315,35 @@ class StudentDropoutPredictor:
             columns_to_drop = ['LearnerCode', 'DiscountType', 'HomeState', 'ProgressionDegree', 'CentreName', 'HomeCity', 'UnauthorisedAbsenceCount']
         elif stage == 's3':
             columns_to_drop = ['LearnerCode', 'DiscountType', 'HomeState', 'ProgressionDegree', 'CentreName', 'HomeCity', 'UnauthorisedAbsenceCount', 'PassedModules', 'AssessedModules']
-        
-        # Remove columns_to_drop from feature lists
-        categorical_features = [col for col in categorical_features if col not in columns_to_drop]
-        numerical_features = [col for col in numerical_features if col not in columns_to_drop]
-        
+
+        # Apply transformations to determine final feature list
+        X_temp = X_train.copy()
+
+        # Drop columns
+        X_temp = X_temp.drop([col for col in columns_to_drop if col in X_temp.columns], axis=1, errors='ignore')
+
+        # Calculate age if DateofBirth exists
+        if 'DateofBirth' in X_temp.columns:
+            X_temp['DateofBirth'] = pd.to_datetime(X_temp['DateofBirth'], format='%d/%m/%Y', errors='coerce')
+            today = datetime.now()
+            X_temp['Age'] = X_temp['DateofBirth'].apply(
+                lambda dob: relativedelta(today, dob).years if pd.notnull(dob) and isinstance(dob, datetime) else np.nan
+            )
+            X_temp = X_temp.drop(['DateofBirth'], axis=1, errors='ignore')
+
+        # Now identify features from the transformed data
+        numerical_features = X_temp.select_dtypes(include=np.number).columns.tolist()
+        categorical_features = X_temp.select_dtypes(exclude=np.number).columns.tolist()
+
         # Create pipelines
         categorical_pipeline = Pipeline([
             ('onehot', OneHotEncoder(sparse_output=False, handle_unknown='ignore')),
         ])
-        
+
         numerical_pipeline = Pipeline([
             ('scaler', StandardScaler()),
         ])
-        
+
         preprocessor = ColumnTransformer(
             transformers=[
                 ('num', numerical_pipeline, numerical_features),
@@ -343,15 +351,15 @@ class StudentDropoutPredictor:
             ],
             remainder='drop'
         )
-        
-        drop_columns_transformer = FunctionTransformer(lambda X: X.drop(columns_to_drop, axis=1, errors='ignore'))
-        
+
+        drop_columns_transformer = FunctionTransformer(lambda X: X.drop([col for col in columns_to_drop if col in X.columns], axis=1, errors='ignore'))
+
         pipeline = Pipeline([
             ('drop_columns', drop_columns_transformer),
             ('age_calculator', AgeCalculator()),
             ('preprocessor', preprocessor)
         ])
-        
+
         return pipeline
 
     def train_xgboost_model(self, stage, hyperparameter_tuning=True):
